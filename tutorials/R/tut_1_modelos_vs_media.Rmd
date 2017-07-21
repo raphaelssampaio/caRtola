@@ -12,7 +12,7 @@ output:
 
 Olá pessoal!
 
-No tutorial anterior, vimos que a média é um indicador limitado para mitar no cartola. Vamos tentar neste tutorial, usar outros modelos e reduzir o risco na tomada de decisão. Começaremos de forma básica, com um modelo de regressão linear. O número a ser batido aqui é RMSE = 4.522518 (lembrando: valores menores são melhores).
+No tutorial anterior, vimos que a média é um indicador limitado para mitar no cartola. Vamos tentar neste tutorial, usar outros modelos e reduzir o risco na tomada de decisão. Começaremos de forma básica, com um modelo de regressão linear, após usaremos um dos algoritmos mais usados em competições o *eXtreme Gradient Boosting*. O número a ser batido aqui é **RMSE = 4.522518**. (lembrando: valores menores são melhores).
 
 <center>![Levy Fidélix - Vamos subir o nível disso aqui](http://geradormemes.com/media/created/n931gu.jpg)</center>
 
@@ -28,8 +28,7 @@ library(ggplot2)     # Plotar gráficos
 library(ggthemes)    # Carregar tema adicional para os gráficos
 library(dplyr)       # Funções para manipulação dos dados 
 library(caret)       # Pacote para modelar os dados
-library(parallel)    # Detectar núcleos do processador
-library(doParallel)  # Usar núcleos para processamento paralelo
+library(ranger)      # Random Forrest
 ```
 
 
@@ -39,7 +38,7 @@ Usaremos os dados do [Cartola](https://github.com/henriquepgomide/caRtola/tree/m
 
 ```{r}
 # Carregar banco de dados
-source("../../lib/R/data_wrangling.R")
+cartola <- read.csv("../../db/cartola_aggregated.csv", stringsAsFactors = FALSE)
 ```
 
 
@@ -54,45 +53,36 @@ source("../../lib/R/data_wrangling.R")
 ### Segmentar o banco de dados
 ```{r}
 # Segmentar banco de dados
-cartola$atletas.atleta_id <- as.character(cartola$atletas.atleta_id)
-
 treino <- cartola %>%
-            filter(atletas.rodada_id < 11 & atletas.status_id == "Provável" & atletas.variacao_num != 0)
+  filter(!(Rodada == 15 & ano == 2017))
 
 validacao <- cartola %>%
-            filter(atletas.rodada_id == 11 & atletas.status_id == "Provável" & atletas.variacao_num != 0)
+  filter(Rodada == 15 & ano == 2017)
 
 # Selecionar somente algumas variáveis
-variaveis <- c("atletas.clube.id.full.name", "casa", "atletas.posicao_id", "atletas.pontos_num", "atletas.media_num")
+variaveis <- c("Rodada", "Posicao", "Pontos", "PontosMedia", "avg.Points", "avg.last05",
+               "variable", "pred.home.score", "pred.away.score", "home.attack", "home.defend")
 
 treino <- treino[, variaveis]
-variaveis <-  validacao[, variaveis]
-
-# Dados da rodada a ser prevista
-# val_df <- df_pred[df_pred$atletas.atleta_id %in% validacao$atletas.atleta_id, ]
+validacao <-  validacao[, variaveis]
 
 # Controles para os modelos
-## Regression Models
 ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 10, allowParallel = TRUE, verboseIter = TRUE)
-## Random Forest
-rfGrid <-  expand.grid(mtry = c(10,20,40,80))   
 ```
 
 ## Visualizações
 
-Antes de começarmos precisamos conduzir análises exploratórias para termos uma ideia de quais variáveis podem estar ligadas à pontuação do cartola (atletas.pontos_num). Para isso, inspecionaremos as variáveis:
+Antes de começarmos precisamos conduzir análises exploratórias para termos uma ideia de quais variáveis podem estar ligadas à pontuação do cartola (Pontos). Para isso, inspecionaremos as variáveis:
 
-* atletas.clube.id.full.name - Nome completo do time
-* atletas.posicao_id - Posição do jogador
-* casa - Jogo aconteceu em casa ou fora
-* atletas.jogos_num - Quantidade de jogos do jogador
+* Posicao - Posição do jogador
+* variable - Jogo aconteceu em casa ou fora
 
 ### Times
 ```{r, fig.height=40}
-ggplot(data = treino, aes(y = atletas.pontos_num, x = 1)) + 
+ggplot(data = treino, aes(y = Pontos, x = 1)) + 
   geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + 
   geom_jitter(width = .8, alpha = .5, colour = "#7cb5ec") +
-  theme_hc() + facet_wrap(~atletas.clube.id.full.name, nrow = 21, shrink = FALSE) + coord_flip() + 
+  theme_hc() + facet_wrap(~ClubeID, nrow = 21, shrink = FALSE) + coord_flip() + 
   labs(title = "Distribuição das médias por time", x = "Time", y = "Média")
 ```
 
@@ -100,10 +90,10 @@ ggplot(data = treino, aes(y = atletas.pontos_num, x = 1)) +
 ### Atletas por posição
 
 ```{r, fig.height=20}
-ggplot(data = treino, aes(y = atletas.pontos_num, x = 1)) + 
+ggplot(data = treino, aes(y = Pontos, x = 1)) + 
   geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + 
   geom_jitter(width = .8, alpha = .5, colour = "#7cb5ec") +
-  theme_hc() + facet_wrap(~atletas.posicao_id, nrow = 6, shrink = FALSE) + coord_flip() + 
+  theme_hc() + facet_wrap(~Posicao, nrow = 6, shrink = FALSE) + coord_flip() + 
   labs(title = "Distribuição das médias por posição", x = "Posição", y = "Média")
 ```
 
@@ -111,20 +101,20 @@ ggplot(data = treino, aes(y = atletas.pontos_num, x = 1)) +
 ### Times vs. casa
 
 ```{r, fig.height=20}
-ggplot(data = treino, aes(y = atletas.pontos_num, factor(casa))) + 
+ggplot(data = treino, aes(y = Pontos, factor(variable))) + 
   geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + 
   geom_jitter(width = .3, alpha = .3, colour = "#7cb5ec") +
-  theme_hc() + facet_wrap(~ atletas.clube.id.full.name, ncol = 3) +
+  theme_hc() + facet_wrap(~ ClubeID, ncol = 3) +
   labs(title = "Distribuição das médias por time e casa", x = "", y = "Pontuação")
 ```
 
 ### Gols e pontuação
 
 ```{r}
-ggplot(data = treino, aes(y = atletas.pontos_num, factor(casa))) + 
+ggplot(data = treino, aes(y = Pontos, factor(variable))) + 
   geom_violin(draw_quantiles = c(0.25, 0.5, 0.75)) + 
   geom_jitter(width = .3, alpha = .3, colour = "#7cb5ec") +
-  theme_hc() + facet_wrap(~ atletas.clube.id.full.name, ncol = 3) +
+  theme_hc() + facet_wrap(~ ClubeID, ncol = 3) +
   labs(title = "Distribuição das médias por time e casa", x = "", y = "Pontuação")
 ```
 
@@ -132,49 +122,27 @@ ggplot(data = treino, aes(y = atletas.pontos_num, factor(casa))) +
 
 ### Análise de regressão linear simples
 ```{r, echo = FALSE, warning=FALSE}
-glmModel_0  <- train(atletas.pontos_num ~ ., data = treino, 
-                     method="glm", metric = "RMSE", preProcess = c("knnImpute","scale", "center"),
-                     trControl = ctrl, na.action = na.pass)
+glmModel_0  <- train(Pontos ~ ., data = treino, 
+                     method="glm", metric = "RMSE", preProcess = c("scale", "center"),
+                     trControl = ctrl, na.action = na.omit)
 ```
 
 ```{r}
 predictions <- predict(glmModel_0, newdata = validacao)
-postResample(pred = predictions, obs = validacao$atletas.pontos_num)
+postResample(pred = predictions, obs = validacao$Pontos)
 ```
 
 
 ### EXtreme Gradient Boosting
 
 ```{r}
-boostTree_0  <- train(atletas.pontos_num ~ ., data = treino, 
-                     method="xgbTree", metric = "RMSE", preProcess = c("knnImpute", "scale", "center"),
-                     trControl = ctrl, na.action = na.pass)
+boostTree_0  <- train(Pontos ~ ., data = treino, 
+                     method="xgbTree", metric = "RMSE", preProcess = c("scale", "center"),
+                     trControl = ctrl, na.action = na.omit)
 boostTree_0
 ```
 
 ```{r}
 predictions_boost <- predict(boostTree_0, newdata = validacao)
-postResample(pred = predictions_boost, obs = validacao$atletas.pontos_num)
+postResample(pred = predictions_boost, obs = validacao$Pontos)
 ```
-
-```{r}
-cluster <- makeCluster(detectCores())
-registerDoParallel(cluster)
-fit.raf <- train(atletas.pontos_num ~.,
-                 data=treino,
-                 method="rf",
-                 preProcess=c("center","scale"),
-                 tunelength=15,
-                 tuneGrid = rfGrid,
-                 trControl=ctrl,
-                 ntree = 1000,
-                 metric="RMSE",
-                 na.action = na.omit)
-on.exit(stopCluster(cluster))
-```
-
-```{r}
-predictions_rf <- predict(fit.raf, newdata = validacao)
-postResample(pred = predictions_rf, obs = validacao$atletas.pontos_num)
-```
-

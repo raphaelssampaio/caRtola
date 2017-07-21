@@ -22,10 +22,10 @@ nzv <- nearZeroVar(df)
 df <- df[, -nzv]
 
 # Split training and validation
-treino <- df %>%
-  filter(!(Rodada < 15 & ano != 2017))
+treino <- cartola %>%
+  filter(!(Rodada == 15 & ano == 2017))
 
-validacao <- df %>%
+validacao <- cartola %>%
   filter(Rodada == 15 & ano == 2017)
 
 validacao <- validacao[complete.cases(validacao), ]
