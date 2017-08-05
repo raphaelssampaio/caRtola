@@ -14,7 +14,7 @@ library(doParallel)
 df <- subset(cartola, cartola$Participou == TRUE | cartola$PrecoVariacao != 0)
 
 # Pick only a subset of variables
-variaveis <- c(2, 3, 5, 7, 8, 29, 32:70, 73:77)
+variaveis <- c(2, 3, 5, 7, 8, 29, 32:67, 73:77)
 df <- df[, variaveis]
 
 # Remove nearzero variance predictors
@@ -22,11 +22,12 @@ nzv <- nearZeroVar(df)
 df <- df[, -nzv]
 
 # Split training and validation
-treino <- cartola %>%
-  filter(!(Rodada == 15 & ano == 2017))
 
-validacao <- cartola %>%
-  filter(Rodada == 15 & ano == 2017)
+treino <- df %>%
+  filter(!(Rodada == 18 & ano == 2017))
+
+validacao <- df %>%
+  filter(Rodada == 18 & ano == 2017)
 
 validacao <- validacao[complete.cases(validacao), ]
 
@@ -53,12 +54,20 @@ eXGBGrid <-  expand.grid(nrounds = 150,
 ###########
 
 ###################
-# GLM
+# Baseline
 ###################
-glmModel_0  <- train(Pontos ~ ., data = treino, 
+glmModel_0  <- train(Pontos ~ PontosMedia, data = treino, 
                      method="glm", metric = "RMSE", preProcess = c("scale", "center"), na.action = na.pass,
                      trControl = ctrl)
 glmModel_0
+
+###################
+# GLM
+###################
+glmModel_1  <- train(Pontos ~ ., data = treino, 
+                     method="glm", metric = "RMSE", preProcess = c("scale", "center"), na.action = na.pass,
+                     trControl = ctrl)
+glmModel_1
 
 ###################
 # Partial Least Square
@@ -99,6 +108,11 @@ eXModel_v1  <- train(Pontos ~ . , data = treino,
                   preProcess = c("scale", "center"), na.action = na.pass,
                   tuneGrid = eXGBGrid, trControl = ctrl)
 
+eXModel_v1_out  <- train(Pontos ~ . , data = treino, 
+                     method="xgbTree", metric = "RMSE", 
+                     preProcess = c("scale", "center", "spatialSign"), na.action = na.omit,
+                     tuneGrid = eXGBGrid, trControl = ctrl)
+
 
 ###################
 # SVM
@@ -111,19 +125,6 @@ svmModel  <- train(Pontos ~ . , data = treino,
 ###################################
 # RANDOM FOREST
 ###################################
-#cluster <- makeCluster(detectCores())
-#registerDoParallel(cluster)
-fit.raf <- train(Pontos ~.,
-                 data=treino,
-                 method="rf",
-                 preProcess=c("center","scale"),
-                 tuneGrid = rfGrid,
-                 trControl=ctrl,
-                 metric="RMSE",
-                 na.action = na.omit,
-                 verbose = TRUE
-)
-
 ptm <- proc.time()
 fit.raf_1 <- train(Pontos ~.,
                  data=treino,
@@ -165,6 +166,17 @@ fit.raf_final <- train(Pontos ~.,
                    verbose = TRUE
 )
 
+fit.raf_f_out <- train(Pontos ~.,
+                       data=treino,
+                       method="ranger",
+                       preProcess=c("center","scale", "spatialSign"),
+                       tuneGrid = rfGrid_final,
+                       trControl=ctrl,
+                       metric="RMSE",
+                       na.action = na.omit,
+                       verbose = TRUE
+)
+
 #stopCluster(cluster)
 
 ###################
@@ -191,6 +203,7 @@ postResample(pred = predictions_raf_2, obs = validacao$Pontos)
 predictions_rf_final <- predict(fit.raf_final, newdata = validacao)
 postResample(pred = predictions_rf_final, obs = validacao$Pontos)
 
+
 # Other models
 results <- resamples(models)
 summary(results)
@@ -215,24 +228,28 @@ postResample(pred = predictions_gbm, obs = validacao$Pontos)
 predictions_svm <- predict(svmModel, newdata = validacao)
 postResample(pred = predictions_svm, obs = validacao$Pontos)
 
-# Champion Model
+# Best EGB Models
 predictions_exb1 <- predict(eXModel_v1, newdata = validacao)
 postResample(pred = predictions_exb1, obs = validacao$Pontos)
+
+predictions_exb1_out <- predict(eXModel_v1_out, newdata = validacao)
+postResample(pred = predictions_exb1_out, obs = validacao$Pontos)
 
 summary(validacao$Pontos)
 summary(predictions_glm)
 summary(predictions_pls)
-summary(predictions_exb)
+summary(predictions_exb1)
+summary(predictions_rf_final)
 summary(predictions_nn)
 summary(predictions_gbm)
 summary(predictions_svm)
 
 # Remove home.score and away.score variables
-df_pred_r <- df_pred[, -c(48,49)]
+df_pred_r <- df_pred
 df_pred_r2 <- df_pred_r[complete.cases(df_pred_r), ]
 
 # Create predictions
-df_pred_r2$next_round <- predict(fit.raf_final, df_pred_r2)
+df_pred_r2$next_round <- predict(eXModel_v1_out, df_pred_r2)
 df_pred_r2 <- arrange(df_pred_r2, - next_round)
 
 ata <- subset(df_pred_r2, df_pred_r2$Posicao == "ata")
@@ -242,5 +259,5 @@ lat <- subset(df_pred_r2, df_pred_r2$Posicao == "lat")
 gol <- subset(df_pred_r2, df_pred_r2$Posicao == "gol")
 tec <- subset(df_pred_r2, df_pred_r2$Posicao == "tec")
 
-gol[1:5, c("Apelido","ClubeID","Posicao", "risk_points", "next_round", "pred.home.score",
+gol[1:10, c("Apelido","ClubeID","Posicao", "risk_points", "next_round", "pred.home.score",
            "pred.away.score", "variable")]
